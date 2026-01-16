@@ -15,13 +15,20 @@ local player = Players.LocalPlayer
 
 local req = request or http_request or (syn and syn.request)
 
--- STATS (PERSIST)
+-- SESSION ID (for webhook clarity)
+getgenv().HOP_SESSION = getgenv().HOP_SESSION
+    or (os.time() .. "-" .. math.random(1000,9999))
+
+-- STATS (BEST POSSIBLE PERSISTENCE)
 getgenv().HOP_STATS = getgenv().HOP_STATS or {
     Attempts = 0,
     Success = 0,
     Fail = 0,
     Retries = 0
 }
+
+-- CORE LOAD LOG FLAG (ANTI-SPAM)
+getgenv().CORE_LOGGED = getgenv().CORE_LOGGED or false
 
 -- WEBHOOK LOGGER
 local function log(msg, emoji)
@@ -35,6 +42,7 @@ local function log(msg, emoji)
                 username = "Server Hopper",
                 content =
                     emoji.." "..msg..
+                    "\n🧠 Session: "..getgenv().HOP_SESSION..
                     "\n👤 Player: "..player.Name..
                     "\n🔁 Attempts: "..getgenv().HOP_STATS.Attempts..
                     "\n✅ Success: "..getgenv().HOP_STATS.Success..
@@ -46,6 +54,12 @@ local function log(msg, emoji)
     end)
 end
 
+-- LOG CORE LOAD ONLY ONCE
+if not getgenv().CORE_LOGGED then
+    log("Core loaded. Hop every "..CFG.HopDelay.."s", "▶️")
+    getgenv().CORE_LOGGED = true
+end
+
 -- GET SERVER
 local function getServer()
     local url =
@@ -54,14 +68,12 @@ local function getServer()
         "/servers/Public?sortOrder=Asc&limit=100"
 
     local data = HttpService:JSONDecode(game:HttpGet(url))
-    for _,s in ipairs(data.data) do
+    for _, s in ipairs(data.data) do
         if s.playing < s.maxPlayers and s.id ~= game.JobId then
             return s.id
         end
     end
 end
-
-log("Core loaded. Hop every "..CFG.HopDelay.."s", "▶️")
 
 -- MAIN LOOP
 while true do
@@ -71,7 +83,11 @@ while true do
     local id = getServer()
     if id then
         local ok = pcall(function()
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, id, player)
+            TeleportService:TeleportToPlaceInstance(
+                game.PlaceId,
+                id,
+                player
+            )
         end)
 
         if ok then
