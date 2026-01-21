@@ -10,20 +10,21 @@ local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 local req = request or http_request or (syn and syn.request)
 
--- ===== PLACE ID / DELAY RESOLUTION =====
+-- ===== PLACE / DELAY =====
 local PLACE_ID = game.PlaceId
-local HopDelay = (CFG.GameHopDelay and CFG.GameHopDelay[PLACE_ID])
+local HopDelay =
+    (CFG.GameHopDelay and CFG.GameHopDelay[PLACE_ID])
     or (CFG.GameHopDelay and CFG.GameHopDelay.Default)
     or 30
 
--- Blox Fruits Place IDs
-local BLOX_FRUITS_PLACES = {
+-- Blox Fruits places
+local BLOX_FRUITS = {
     [2753915549] = true,
     [4442272183] = true,
     [7449423635] = true
 }
 
-local isBloxFruits = BLOX_FRUITS_PLACES[PLACE_ID] == true
+local isBloxFruits = BLOX_FRUITS[PLACE_ID] == true
 
 -- ===== WEBHOOK (STATE ONLY) =====
 local lastState
@@ -44,14 +45,15 @@ local function logState(msg, emoji)
                 content =
                     emoji.." "..msg..
                     "\n👤 "..player.Name..
-                    "\n🆔 "..string.sub(game.JobId,1,8)..
+                    "\n🌍 PlaceId: "..PLACE_ID..
+                    "\n🆔 Server: "..string.sub(game.JobId,1,8)..
                     "\n⏱ Delay: "..HopDelay.."s"
             })
         })
     end)
 end
 
--- ===== COMBAT CHECK (ONLY FOR BLOX FRUITS) =====
+-- ===== COMBAT CHECK (BLOX FRUITS ONLY) =====
 local function inCombat()
     if not isBloxFruits then return false end
 
@@ -61,7 +63,9 @@ local function inCombat()
     for _,v in ipairs(gui:GetDescendants()) do
         if v:IsA("TextLabel") then
             local t = v.Text or ""
-            if t:find("Combat") or t:find("Bounty") or t:find("leave the game") then
+            if t:find("Combat")
+            or t:find("Bounty")
+            or t:find("leave the game") then
                 return true
             end
         end
@@ -90,11 +94,12 @@ local function getServer()
     end
 end
 
--- ===== MAIN TIMER LOOP =====
+-- ===== MAIN LOOP =====
 logState("Auto Hop Active", "▶️")
 
 local elapsed = 0
 local lastTick = os.clock()
+local wasInCombat = false
 
 while true do
     task.wait(1)
@@ -104,14 +109,19 @@ while true do
     lastTick = now
 
     if inCombat() then
-        logState("Paused — In Combat (Blox Fruits)", "⏸️")
+        if not wasInCombat then
+            logState("Paused — In Combat", "⏸️")
+            wasInCombat = true
+        end
+        -- DO NOT advance timer
         continue
     end
 
-    if lastState ~= "Auto Hop Active" then
-        logState("Combat Cleared — Resuming Timer", "▶️")
+    if wasInCombat then
+        logState("Combat Cleared — Resuming in 5s", "▶️")
         task.wait(5)
         lastTick = os.clock()
+        wasInCombat = false
     end
 
     elapsed += delta
@@ -119,12 +129,12 @@ while true do
     if elapsed >= HopDelay then
         elapsed = 0
 
-        local serverId = getServer()
-        if serverId then
+        local id = getServer()
+        if id then
             logState("Hopping Server", "🚀")
             TeleportService:TeleportToPlaceInstance(
                 PLACE_ID,
-                serverId,
+                id,
                 player
             )
             task.wait(10)
