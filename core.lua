@@ -1,68 +1,81 @@
 repeat task.wait() until game:IsLoaded()
 
--- ===== CONFIG =====
-local CFG = getgenv().HOP_CFG
-if not CFG then warn("HOP_CFG missing") return end
+--// ===============================
+--// AUTO SERVER HOP (CORE)
+--// ===============================
 
--- ===== SERVICES =====
+--// SERVICES
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
-local RunService = game:GetService("RunService")
 
-local player = Players.LocalPlayer
+local lp = Players.LocalPlayer
 local req = request or http_request or (syn and syn.request)
 
--- ===== CONSTANTS =====
-local PLACE_ID = game.PlaceId
+--// ===============================
+--// CONFIG (FROM EXECUTABLE)
+--// ===============================
+local CFG = getgenv().HOP_CFG
+if not CFG then
+    warn("HOP_CFG not found. Use executable loader.")
+    return
+end
+
 local HOP_DELAY = CFG.HopDelay or 300
-local RETRY_DELAY = CFG.RetryDelay or 5
+local POST_COMBAT_COOLDOWN = CFG.PostCombatCooldown or 5
+local WEBHOOK_URL = CFG.Webhook
 
-local BLOX_FRUITS = {
-    [2753915549] = true,
-    [4442272183] = true,
-    [7449423635] = true
-}
-local isBloxFruits = BLOX_FRUITS[PLACE_ID] == true
+--// ===============================
+--// STATE
+--// ===============================
+local elapsed = 0
+local wasInCombat = false
+local hopping = false
+local lastWebhookState
 
--- ===== WEBHOOK =====
-local lastLog
-local function webhook(msg, emoji)
-    if msg == lastLog then return end
-    lastLog = msg
+--// ===============================
+--// WEBHOOK (EMBED / COLORFUL)
+--// ===============================
+local function sendWebhook(title, combatText, color)
+    if not req or not WEBHOOK_URL then return end
+    if lastWebhookState == title then return end
+    lastWebhookState = title
 
-    print("[ServerHop]", msg)
-
-    if not CFG.Webhook or not req then return end
     pcall(function()
         req({
-            Url = CFG.Webhook,
+            Url = WEBHOOK_URL,
             Method = "POST",
-            Headers = {["Content-Type"]="application/json"},
+            Headers = {["Content-Type"] = "application/json"},
             Body = HttpService:JSONEncode({
                 username = "Auto Server Hop",
-                content =
-                    emoji.." "..msg..
-                    "\n👤 "..player.Name..
-                    "\n🆔 "..string.sub(game.JobId,1,8)..
-                    "\n⏱ Delay: "..HOP_DELAY.."s"
+                embeds = {{
+                    title = title,
+                    color = color,
+                    fields = {
+                        {name = "👤 Player", value = lp.Name, inline = true},
+                        {name = "⚔️ Combat", value = combatText, inline = true},
+                        {name = "⏱ Hop Delay", value = HOP_DELAY.."s", inline = true},
+                        {name = "🗺 PlaceId", value = tostring(game.PlaceId), inline = true},
+                        {name = "🆔 JobId", value = string.sub(game.JobId,1,8), inline = true}
+                    },
+                    footer = { text = "Auto Server Hop" }
+                }}
             })
         })
     end)
 end
 
--- ===== COMBAT DETECTION (BLOX FRUITS) =====
+--// ===============================
+--// COMBAT DETECTION (BLOX FRUITS)
+--// ===============================
 local function inCombat()
-    if not isBloxFruits then return false end
-    local gui = player:FindFirstChild("PlayerGui")
+    local gui = lp:FindFirstChild("PlayerGui")
     if not gui then return false end
 
     for _,v in ipairs(gui:GetDescendants()) do
-        if v:IsA("TextLabel") then
-            local t = v.Text or ""
-            if t:find("Combat")
-            or t:find("Bounty")
-            or t:find("leave the game") then
+        if v:IsA("TextLabel") and v.Visible then
+            local t = (v.Text or ""):lower()
+            if t:find("combat") or t:find("bounty") or t:find("leave the game") then
                 return true
             end
         end
@@ -70,30 +83,29 @@ local function inCombat()
     return false
 end
 
--- ===== SAFE ZONE (CASTLE) =====
-local function teleportToSafeZone()
-    if not isBloxFruits then return end
-
-    local char = player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    -- Castle on the Sea coords (safe)
+--// ===============================
+--// SAFE ZONE (CASTLE ON THE SEA)
+--// ===============================
+local function tpToCastle()
+    local char = lp.Character or lp.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart", 5)
+    if not hrp then return false end
     hrp.CFrame = CFrame.new(1060, 17, 1370)
+    task.wait(2)
+    return true
 end
 
--- ===== SERVER FETCH =====
+--// ===============================
+--// SERVER FETCH
+--// ===============================
 local function getServer()
-    local ok, data = pcall(function()
-        return HttpService:JSONDecode(
-            game:HttpGet(
-                "https://games.roblox.com/v1/games/"..
-                PLACE_ID..
-                "/servers/Public?sortOrder=Asc&limit=100"
-            )
+    local data = HttpService:JSONDecode(
+        game:HttpGet(
+            "https://games.roblox.com/v1/games/"..
+            game.PlaceId..
+            "/servers/Public?sortOrder=Asc&limit=100"
         )
-    end)
-    if not ok or not data or not data.data then return end
+    )
 
     for _,s in ipairs(data.data) do
         if s.playing < s.maxPlayers and s.id ~= game.JobId then
@@ -102,72 +114,47 @@ local function getServer()
     end
 end
 
--- ===== TELEPORT FIREWALL (BLOCK ALL OTHER SCRIPTS) =====
-local rawTeleport = TeleportService.TeleportToPlaceInstance
-local teleportLock = false
+--// ===============================
+--// START
+--// ===============================
+sendWebhook("▶ Auto Hop Started", "Not In Combat", 0x3498DB)
 
-TeleportService.TeleportToPlaceInstance = function(self, placeId, jobId, plr, ...)
-    if teleportLock then return end
-
-    if isBloxFruits then
-        if inCombat() then
-            webhook("External Hop BLOCKED — In Combat", "⛔")
-            return
-        end
-
-        teleportLock = true
-        webhook("External Hop Intercepted — Moving to Safe Zone", "🛡️")
-        teleportToSafeZone()
-        task.wait(2)
-        teleportLock = false
-    end
-
-    webhook("Allowing Server Hop", "🚀")
-    return rawTeleport(self, placeId, jobId, plr, ...)
-end
-
--- ===== MAIN TIMER =====
-webhook("Auto Hop Active", "▶️")
-
-local elapsed = 0
-local last = os.clock()
-local wasInCombat = false
-
+--// ===============================
+--// MAIN LOOP
+--// ===============================
 while true do
     task.wait(1)
-
-    local now = os.clock()
-    elapsed += (now - last)
-    last = now
+    elapsed += 1
 
     if inCombat() then
-        wasInCombat = true
-        webhook("Paused — In Combat", "⏸️")
         elapsed = 0
+        if not wasInCombat then
+            sendWebhook("⛔ In Combat — Hop Locked", "IN COMBAT", 0xE74C3C)
+        end
+        wasInCombat = true
         continue
     end
 
     if wasInCombat then
-        webhook("Combat Cleared — Waiting 5s", "🕒")
-        task.wait(5)
-        elapsed = 0
+        sendWebhook("🟢 Combat Ended — Cooldown", "SAFE", 0x2ECC71)
+        task.wait(POST_COMBAT_COOLDOWN)
         wasInCombat = false
+        elapsed = 0
     end
 
-    if elapsed >= HOP_DELAY then
+    if elapsed >= HOP_DELAY and not hopping then
+        hopping = true
         elapsed = 0
+
+        sendWebhook("🛡 Moving To Safe Zone", "SAFE", 0xF1C40F)
+        tpToCastle()
+
         local server = getServer()
         if server then
-            webhook("Hopping Server", "🚀")
-            TeleportService:TeleportToPlaceInstance(
-                PLACE_ID,
-                server,
-                player
-            )
-            task.wait(10)
-        else
-            webhook("No Server Found — Retrying", "⚠️")
-            task.wait(RETRY_DELAY)
+            sendWebhook("🚀 Hopping Server", "SAFE", 0x3498DB)
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, server, lp)
         end
+
+        hopping = false
     end
 end
