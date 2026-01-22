@@ -90,7 +90,7 @@ local function tpToCastle()
     local char = lp.Character or lp.CharacterAdded:Wait()
     local hrp = char:WaitForChild("HumanoidRootPart", 5)
     if not hrp then return false end
-    hrp.CFrame = CFrame.new(1060, 17, 1370)
+    hrp.CFrame = CFrame.new(-5073, 315, -3150)
     task.wait(2)
     return true
 end
